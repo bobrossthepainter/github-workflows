@@ -1,0 +1,63 @@
+name: GHCR Release
+
+on:
+  workflow_call:
+    inputs:
+      container-registry:
+        description: "Registry to push the container to. E.g. ghcr.io"
+        required: false
+        type: string
+        default: ghcr.io
+      container-repository:
+        description: "Repository to push the container to. E.g. bobrossthepainter/some-repo"
+        required: false
+        type: string
+    secrets:
+      container-registry-user:
+        description: "Registry user."
+        required: false
+      container-registry-token:
+        description: "Registry token."
+        required: false
+
+env:
+  CONTAINER_REGISTRY: ${{ inputs.container-registry }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Resolve Registry attributes
+        run: |
+          INPUT=${{ inputs.container-repository }}
+          CONTAINER_REPOSITORY="${INPUT:-${{ github.repository }}}"
+          echo CONTAINER_REPOSITORY=$CONTAINER_REPOSITORY >> $GITHUB_ENV
+
+          INPUT=${{ secrets.container-registry-user }}
+          CONTAINER_REGISTRY_USER="${INPUT:-${{ github.actor }}}"
+          echo CONTAINER_REGISTRY_USER=$CONTAINER_REGISTRY_USER >> $GITHUB_ENV
+
+          INPUT=${{ secrets.container-registry-password }}
+          CONTAINER_REGISTRY_PASSWORD="${INPUT:-${{ secrets.GITHUB_TOKEN }}}"
+          echo CONTAINER_REGISTRY_PASSWORD=$CONTAINER_REGISTRY_PASSWORD >> $GITHUB_ENV
+
+      - name: GHCR login
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ env.CONTAINER_REGISTRY_USER }}
+          password: ${{ env.CONTAINER_REGISTRY_PASSWORD }}
+
+      - name: Re-tag container image
+        run: |
+          CONTAINER_IMAGE=$CONTAINER_REGISTRY/${CONTAINER_REPOSITORY,,}
+          CURRENT_TAG=$(TZ=UTC0 git show -s --date=format-local:"%Y%m%d" --format=main-%cd-%h)
+          echo "Resolved container image for re-tagging: $CONTAINER_IMAGE:$CURRENT_TAG"
+          docker pull $CONTAINER_IMAGE:$CURRENT_TAG
+          docker tag $CONTAINER_IMAGE:$CURRENT_TAG $CONTAINER_IMAGE:${{ github.ref_name }}
+          docker push $CONTAINER_IMAGE:${{ github.ref_name }}
