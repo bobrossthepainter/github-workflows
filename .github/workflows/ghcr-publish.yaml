@@ -12,6 +12,10 @@ on:
         description: "Repository to push the container to. E.g. bobrossthepainter/some-repo"
         required: false
         type: string
+      multi-arch:
+        description: "Specifies architectures for image. E.g. linux/amd64,linux/arm64"
+        required: false
+        type: string
     secrets:
       container-registry-user:
         description: "Registry user."
@@ -53,11 +57,49 @@ jobs:
           username: ${{ env.CONTAINER_REGISTRY_USER }}
           password: ${{ env.CONTAINER_REGISTRY_PASSWORD }}
 
-      - name: Re-tag container image
+      # - name: Get current branch
+      #   id: check_step
+      #   run: |
+      #     raw=$(git branch -r --contains ${{ github.ref }})
+      #     branch=${raw##*/}
+      #     echo "::set-output name=branch::$branch"
+      #     echo "Branch is $branch."
+
+      - name: Resolve current image tag
         run: |
           CONTAINER_IMAGE=$CONTAINER_REGISTRY/${CONTAINER_REPOSITORY,,}
-          CURRENT_TAG=$(TZ=UTC0 git show -s --date=format-local:"%Y%m%d" --format=main-%cd-%h)
+          REF=${{ github.event.base_ref }}
+          CURRENT_TAG=$(TZ=UTC0 git show -s --date=format-local:"%Y%m%d" --format=${REF##refs/heads/}-%cd-%h)
           echo "Resolved container image for re-tagging: $CONTAINER_IMAGE:$CURRENT_TAG"
-          docker pull $CONTAINER_IMAGE:$CURRENT_TAG
-          docker tag $CONTAINER_IMAGE:$CURRENT_TAG $CONTAINER_IMAGE:${{ github.ref_name }}
-          docker push $CONTAINER_IMAGE:${{ github.ref_name }}
+          echo CONTAINER_IMAGE=$CONTAINER_IMAGE >> $GITHUB_ENV
+          echo CURRENT_TAG=$CURRENT_TAG >> $GITHUB_ENV
+          echo IMAGE_NAME=$CONTAINER_IMAGE:$CURRENT_TAG >> $GITHUB_ENV
+          echo NEW_IMAGE_NAME=$CONTAINER_IMAGE:${{ github.ref_name }} >> $GITHUB_ENV
+
+      - name: Re-tag container image
+        if: ${{ !inputs.multi-arch }}
+        run: |
+          docker pull $IMAGE_NAME
+          docker tag $IMAGE_NAME $NEW_IMAGE_NAME
+          docker push $NEW_IMAGE_NAME
+
+      - name: Re-tag multiarch image
+        if: ${{ inputs.multi-arch }}
+        run: |
+          resulting_params=()
+          # iterate input multi-arch aray, separator ,
+          ARCHS=${{ inputs.multi-arch }}
+          for PLATFORM in ${ARCHS//,/ }
+          do
+            OS=${PLATFORM%%/*}
+            ARCH=${PLATFORM##*/}
+            arch_alias=$(echo -n $ARCH | md5sum | cut -d' ' -f1)
+            filename="descriptor_${arch_alias}.json"
+            resulting_params+=("-f")
+            resulting_params+=($filename)
+            echo "Executing: docker buildx imagetools inspect --raw $IMAGE_NAME | jq '.manifests[] | select(.platform.architecture |contains(\"$ARCH\"))' > \"$filename\""
+            docker buildx imagetools inspect --raw $IMAGE_NAME | jq ".manifests[] | select(.platform.architecture |contains(\"$ARCH\"))" > "$filename"
+          done
+
+          echo "Executing docker buildx imagetools create -t $NEW_IMAGE_NAME ${resulting_params[@]}"
+          docker buildx imagetools create -t $NEW_IMAGE_NAME ${resulting_params[@]}
