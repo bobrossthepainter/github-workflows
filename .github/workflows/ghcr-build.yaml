@@ -118,6 +118,7 @@ jobs:
           images: ${{ env.CONTAINER_REGISTRY }}/${{ env.CONTAINER_REPOSITORY }}
           tags: |
             type=raw,priority=200,value={{branch}}{{tag}}-{{date 'YYYYMMDD'}}-{{sha}},enable=${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,priority=100,event=tag
             type=ref,priority=100,event=branch
             type=ref,priority=100,event=pr,suffix=-{{date 'YYYYMMDD'}}-{{sha}}
